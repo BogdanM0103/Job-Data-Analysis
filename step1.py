@@ -5,6 +5,24 @@ import pandas as pd
 from typing import Any, cast
 from bs4 import BeautifulSoup
 
+# --- settings ---
+SITEMAP_INDEX_URL = "https://www.ejobs.ro/sitemap-listings-index.xml"
+SITEMAPS_CSV = "sitemaps.csv"
+JOBS_CSV = "jobs.csv"
+SITEMAP_DELAY = 1      # seconds between sitemap requests
+JOB_DELAY = 0.5        # seconds between job page requests
+SAVE_EVERY = 100       # save progress to CSV every N jobs
+
+
+# --- helpers ---
+def fetch_urls_from_sitemap(sitemap_url: str) -> list[str]:
+    response = requests.get(sitemap_url, timeout=30)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'xml')
+        return [loc.text for loc in soup.find_all('loc')]
+    return []
+
+
 def parse_job(job_data: dict[str, Any]) -> dict[str, Any]:
     # Step A: grab the nested parts first, each with a safe fallback
     company = job_data.get("hiringOrganization", {})
@@ -41,6 +59,7 @@ def parse_job(job_data: dict[str, Any]) -> dict[str, Any]:
     }
     return row
 
+
 def scrape_job_posting(url: str) -> dict[str, Any] | None:
     response = requests.get(url, timeout=30)
     if response.status_code in (429, 403):
@@ -55,64 +74,73 @@ def scrape_job_posting(url: str) -> dict[str, Any] | None:
                     return parse_job(item)
     return None
 
-def get_url(sitemap_url: str) -> list[str]:
-    response = requests.get(sitemap_url, timeout=30)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'xml')
-        urls = [loc.text for loc in soup.find_all('loc')]
-        return urls
-    return []
 
-url = "https://www.ejobs.ro/sitemap-listings-index.xml"
-
-sitemap_urls = get_url(url)
-print(f"Found {len(sitemap_urls)} category sitemaps")
-
-all_job_urls: list[str] = []
-sitemap_rows: list[dict[str, Any]] = []
-for i, sitemap_url in enumerate(sitemap_urls):
-    category = sitemap_url.replace("https://www.ejobs.ro/sitemap-listings-", "").replace(".xml", "")
-    jobs = get_url(sitemap_url)
-    all_job_urls.extend(jobs)
-    sitemap_rows.append({
-        "category": category,
-        "sitemap_url": sitemap_url,
-        "job_count": len(jobs),
-    })
-    print(f"Sitemap {i + 1}/{len(sitemap_urls)}: {category} - {len(jobs)} jobs")
-    time.sleep(1)
-
-sitemaps_df = pd.DataFrame(sitemap_rows)
-sitemaps_df.to_csv("sitemaps.csv", index=False, encoding="utf-8-sig")
-print(sitemaps_df.sort_values("job_count", ascending=False).head(10))
-
-exit()  # TEMPORARY: stop here so the 2-hour job scraping below doesn't start. Delete this line when ready.
-
-urls_to_scrape = all_job_urls
-
-rows: list[dict[str, Any]] = []
-for i, job_url in enumerate(urls_to_scrape):
-    print(f"Scraping {i + 1}/{len(urls_to_scrape)}: {job_url}")
+def save_csv(rows: list[dict[str, Any]], path: str) -> None:
     try:
-        row = scrape_job_posting(job_url)
-        if row is not None:
-            rows.append(row)
-    except Exception as e:
-        print("Failed:", job_url, e)
+        pd.DataFrame(rows).to_csv(path, index=False, encoding="utf-8-sig")
+        print(f"Saved {len(rows)} rows to {path}")
+    except PermissionError as e:
+        print(f"Could not save {path} (is it open in Excel?):", e)
 
-    if (i + 1) % 100 == 0:
+
+# --- stages ---
+def collect_job_urls() -> list[str]:
+    """Stage A: read every category sitemap and return the unique job URLs."""
+    sitemap_urls = fetch_urls_from_sitemap(SITEMAP_INDEX_URL)
+    print(f"Found {len(sitemap_urls)} category sitemaps")
+
+    all_job_urls: list[str] = []
+    sitemap_rows: list[dict[str, Any]] = []
+    for i, sitemap_url in enumerate(sitemap_urls):
+        category = sitemap_url.replace("https://www.ejobs.ro/sitemap-listings-", "").replace(".xml", "")
+        jobs = fetch_urls_from_sitemap(sitemap_url)
+        all_job_urls.extend(jobs)
+        sitemap_rows.append({
+            "category": category,
+            "sitemap_url": sitemap_url,
+            "job_count": len(jobs),
+        })
+        print(f"Sitemap {i + 1}/{len(sitemap_urls)}: {category} - {len(jobs)} jobs")
+        time.sleep(SITEMAP_DELAY)
+
+    save_csv(sitemap_rows, SITEMAPS_CSV)
+    print(pd.DataFrame(sitemap_rows).sort_values("job_count", ascending=False).head(10))
+
+    # the same job can appear in several categories -> drop duplicates, keep order
+    unique_urls = list(dict.fromkeys(all_job_urls))
+    print("Total job URLs: ", len(all_job_urls))
+    print("Unique job URLs:", len(unique_urls))
+    return unique_urls
+
+
+def scrape_jobs(urls: list[str]) -> pd.DataFrame:
+    """Stage B: visit every job page (slow, ~2 hours) and save the results."""
+    rows: list[dict[str, Any]] = []
+    for i, job_url in enumerate(urls):
+        print(f"Scraping {i + 1}/{len(urls)}: {job_url}")
         try:
-            pd.DataFrame(rows).to_csv("jobs.csv", index=False, encoding="utf-8-sig")
-            print(f"Saved {len(rows)} rows")
-        except PermissionError as e:
-            print(f"Smth went wrong with the file", e)
-    time.sleep(0.5)
+            row = scrape_job_posting(job_url)
+            if row is not None:
+                rows.append(row)
+        except Exception as e:
+            print("Failed:", job_url, e)
 
-df = pd.DataFrame(rows)
-df.to_csv("jobs.csv", index=False, encoding="utf-8-sig")
+        if (i + 1) % SAVE_EVERY == 0:
+            save_csv(rows, JOBS_CSV)
+        time.sleep(JOB_DELAY)
 
-print(df.head())
-df.info()
+    save_csv(rows, JOBS_CSV)
+    return pd.DataFrame(rows)
 
-print("Total job URLs: ", len(all_job_urls))
-print("Unique job URLs:", len(set(all_job_urls)))
+
+def main() -> None:
+    urls = collect_job_urls()
+
+    # Uncomment to run the slow job scraping (~2 hours):
+    # df = scrape_jobs(urls)
+    # print(df.head())
+    # df.info()
+
+
+if __name__ == "__main__":
+    main()
