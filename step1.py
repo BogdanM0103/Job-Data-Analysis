@@ -10,6 +10,8 @@ def parse_job(job_data: dict[str, Any]) -> dict[str, Any]:
     company = job_data.get("hiringOrganization", {})
     salary = job_data.get("baseSalary", {})
     salary_value = salary.get("value", {})
+    experience = job_data.get("experienceRequirements", {})
+    education = job_data.get("educationRequirements", {})
 
     # jobLocation is a LIST of places -> take the first one (if the list isn't empty)
     locations = cast(list[dict[str, Any]], job_data.get("jobLocation", []))
@@ -29,11 +31,20 @@ def parse_job(job_data: dict[str, Any]) -> dict[str, Any]:
         "currency": salary.get("currency"),
         "date_posted": job_data.get("datePosted"),
         "url": job_data.get("url"),
+        "employment_type": ", ".join(job_data.get("employmentType", [])),
+        "experience_months": experience.get("monthsOfExperience"),
+        "education": education.get("credentialCategory"),
+        "industry": ", ".join(job_data.get("industry", [])),
+        "occupations": ", ".join(job_data.get("relevantOccupation", [])),
+        "valid_through": job_data.get("validThrough"),
+        "description": job_data.get("description"),
     }
     return row
 
 def scrape_job_posting(url: str) -> dict[str, Any] | None:
     response = requests.get(url, timeout=30)
+    if response.status_code in (429, 403):
+        print("WARNING: blocked by the site (status", response.status_code, ") - slow down")
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, 'html.parser')
         script_tag = soup.find('script', type='application/ld+json')
@@ -44,7 +55,7 @@ def scrape_job_posting(url: str) -> dict[str, Any] | None:
                     return parse_job(item)
     return None
 
-def get_job_urls(sitemap_url: str) -> list[str]:
+def get_url(sitemap_url: str) -> list[str]:
     response = requests.get(sitemap_url, timeout=30)
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, 'xml')
@@ -52,25 +63,56 @@ def get_job_urls(sitemap_url: str) -> list[str]:
         return urls
     return []
 
-url = "https://www.ejobs.ro/sitemap-listings-it-software.xml"
+url = "https://www.ejobs.ro/sitemap-listings-index.xml"
 
-rows: list[dict[str, Any]] = []
+sitemap_urls = get_url(url)
+print(f"Found {len(sitemap_urls)} category sitemaps")
 
-first_5_jobs_urls = get_job_urls(url)[:5]
-for i, job_url in enumerate(first_5_jobs_urls):
-    print(f"Scraping {i + 1}/{len(first_5_jobs_urls)}: {job_url}")
-    job_data = None
-    try:
-        job_data = scrape_job_posting(job_url)
-        if job_data is not None:
-            rows.append(job_data)
-    except requests.RequestException as e:
-        print("Failed:", job_url, e)
+all_job_urls: list[str] = []
+sitemap_rows: list[dict[str, Any]] = []
+for i, sitemap_url in enumerate(sitemap_urls):
+    category = sitemap_url.replace("https://www.ejobs.ro/sitemap-listings-", "").replace(".xml", "")
+    jobs = get_url(sitemap_url)
+    all_job_urls.extend(jobs)
+    sitemap_rows.append({
+        "category": category,
+        "sitemap_url": sitemap_url,
+        "job_count": len(jobs),
+    })
+    print(f"Sitemap {i + 1}/{len(sitemap_urls)}: {category} - {len(jobs)} jobs")
     time.sleep(1)
 
-print(len(rows))
+sitemaps_df = pd.DataFrame(sitemap_rows)
+sitemaps_df.to_csv("sitemaps.csv", index=False, encoding="utf-8-sig")
+print(sitemaps_df.sort_values("job_count", ascending=False).head(10))
+
+exit()  # TEMPORARY: stop here so the 2-hour job scraping below doesn't start. Delete this line when ready.
+
+urls_to_scrape = all_job_urls
+
+rows: list[dict[str, Any]] = []
+for i, job_url in enumerate(urls_to_scrape):
+    print(f"Scraping {i + 1}/{len(urls_to_scrape)}: {job_url}")
+    try:
+        row = scrape_job_posting(job_url)
+        if row is not None:
+            rows.append(row)
+    except Exception as e:
+        print("Failed:", job_url, e)
+
+    if (i + 1) % 100 == 0:
+        try:
+            pd.DataFrame(rows).to_csv("jobs.csv", index=False, encoding="utf-8-sig")
+            print(f"Saved {len(rows)} rows")
+        except PermissionError as e:
+            print(f"Smth went wrong with the file", e)
+    time.sleep(0.5)
 
 df = pd.DataFrame(rows)
-df.head()
-df.info()
 df.to_csv("jobs.csv", index=False, encoding="utf-8-sig")
+
+print(df.head())
+df.info()
+
+print("Total job URLs: ", len(all_job_urls))
+print("Unique job URLs:", len(set(all_job_urls)))
