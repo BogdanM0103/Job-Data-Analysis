@@ -62,18 +62,19 @@ def parse_job(job_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def scrape_job_posting(url: str) -> dict[str, Any] | None:
-    response = requests.get(url, timeout=30)
-    if response.status_code in (429, 403):
-        print("WARNING: blocked by the site (status", response.status_code, ") - slow down")
-        time.sleep(BLOCKED_DELAY)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        script_tag = soup.find('script', type='application/ld+json')
-        if script_tag and script_tag.string:
-            data = json.loads(script_tag.string)
-            for item in data.get("@graph", []):
-                if item.get("@type") == "JobPosting":
-                    return parse_job(item)
+    for attempt in range(0, 3):
+        response = requests.get(url, timeout=30)
+        if response.status_code in (429, 403):
+            print("WARNING: blocked by the site (status", response.status_code, ") - slow down")
+            time.sleep(BLOCKED_DELAY)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            script_tag = soup.find('script', type='application/ld+json')
+            if script_tag and script_tag.string:
+                data = json.loads(script_tag.string)
+                for item in data.get("@graph", []):
+                    if item.get("@type") == "JobPosting":
+                        return parse_job(item)
     return None
 
 
