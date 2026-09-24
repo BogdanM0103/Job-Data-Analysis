@@ -10,9 +10,10 @@ SITEMAP_INDEX_URL = "https://www.ejobs.ro/sitemap-listings-index.xml"
 SITEMAPS_CSV = "sitemaps.csv"
 JOBS_CSV = "jobs.csv"
 SITEMAP_DELAY = 1      # seconds between sitemap requests
-JOB_DELAY = 0.5        # seconds between job page requests
+JOB_DELAY = 1        # seconds between job page requests
+BLOCKED_DELAY = 10
 SAVE_EVERY = 100       # save progress to CSV every N jobs
-
+TEST_LIMIT = 5
 
 # --- helpers ---
 def fetch_urls_from_sitemap(sitemap_url: str) -> list[str]:
@@ -64,6 +65,7 @@ def scrape_job_posting(url: str) -> dict[str, Any] | None:
     response = requests.get(url, timeout=30)
     if response.status_code in (429, 403):
         print("WARNING: blocked by the site (status", response.status_code, ") - slow down")
+        time.sleep(BLOCKED_DELAY)
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, 'html.parser')
         script_tag = soup.find('script', type='application/ld+json')
@@ -137,9 +139,9 @@ def main() -> None:
     urls = collect_job_urls()
 
     # Uncomment to run the slow job scraping (~2 hours):
-    # df = scrape_jobs(urls)
-    # print(df.head())
-    # df.info()
+    df = scrape_jobs(urls)
+    print(df.head())
+    df.info()
 
 
 if __name__ == "__main__":
