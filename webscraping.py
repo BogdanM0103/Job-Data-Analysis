@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 SITEMAP_INDEX_URL = "https://www.ejobs.ro/sitemap-listings-index.xml"
 SITEMAPS_CSV = "sitemaps.csv"
 JOBS_CSV = "jobs.csv"
+FAILED_JOBS_CSV = "failed_jobs.csv"
 SITEMAP_DELAY = 1      # seconds between sitemap requests
 JOB_DELAY = 1        # seconds between job page requests
 BLOCKED_DELAY = 10
@@ -65,7 +66,7 @@ def scrape_job_posting(url: str) -> dict[str, Any] | None:
     for attempt in range(0, 3):
         response = requests.get(url, timeout=30)
         if response.status_code in (429, 403):
-            print("WARNING: blocked by the site (status", response.status_code, ") - slow down")
+            print(f"WARNING ATTEMPT #{attempt}: blocked by the site (status", response.status_code, ") - slow down")
             time.sleep(BLOCKED_DELAY)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -119,20 +120,26 @@ def collect_job_urls() -> list[str]:
 def scrape_jobs(urls: list[str]) -> pd.DataFrame:
     """Stage B: visit every job page (slow, ~2 hours) and save the results."""
     rows: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     for i, job_url in enumerate(urls):
         print(f"Scraping {i + 1}/{len(urls)}: {job_url}")
         try:
             row = scrape_job_posting(job_url)
             if row is not None:
                 rows.append(row)
+            else:
+                failed.append({"url": job_url, "reason": "no data after 3 attempts"})
         except Exception as e:
             print("Failed:", job_url, e)
+            failed.append({"url": job_url, "reason": "no data after 3 attempts"})
 
         if (i + 1) % SAVE_EVERY == 0:
             save_csv(rows, JOBS_CSV)
+            save_csv(failed, FAILED_JOBS_CSV)
         time.sleep(JOB_DELAY)
 
     save_csv(rows, JOBS_CSV)
+    save_csv(failed, FAILED_JOBS_CSV)
     return pd.DataFrame(rows)
 
 
