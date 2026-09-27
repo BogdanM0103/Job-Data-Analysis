@@ -21,7 +21,12 @@ def fetch_urls_from_sitemap(sitemap_url: str) -> list[str]:
     response = requests.get(sitemap_url, timeout=30)
     if response.status_code == 200:
         soup = BeautifulSoup(response.text, 'xml')
-        return [loc.text for loc in soup.find_all('loc')]
+        # This code below exists after a bug in this function. "failed_jobs.csv" got filled with image urls because the function collected images with the tag <image:loc> thinking they're just <loc>
+        links: list[str] = []
+        for block in soup.find_all(['url', 'sitemap']):
+            first_loc = block.find('loc')
+            links.append(first_loc.get_text())
+        return links
     return []
 
 
