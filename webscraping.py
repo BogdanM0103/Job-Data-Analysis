@@ -136,7 +136,7 @@ def scrape_jobs(urls: list[str]) -> pd.DataFrame:
                 failed.append({"url": job_url, "reason": "no data after 3 attempts"})
         except Exception as e:
             print("Failed:", job_url, e)
-            failed.append({"url": job_url, "reason": "no data after 3 attempts"})
+            failed.append({"url": job_url, "reason": "crash / parsing error"})
 
         if (i + 1) % SAVE_EVERY == 0:
             save_csv(rows, JOBS_CSV)
