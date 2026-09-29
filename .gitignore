@@ -2,3 +2,4 @@
 __pycache__/
 jobs.csv
 failed_jobs.csv
+jobs.db
